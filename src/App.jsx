@@ -1,15 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Play, Monitor, Settings, Plus, Mic, CheckCircle2, RotateCcw, Clock, Trash2, Volume2 } from 'lucide-react';
+import { Play, Monitor, Settings, Plus, Mic, CheckCircle2, RotateCcw, Clock, Trash2, Volume2, Save } from 'lucide-react';
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbymRfcrs1wV8FsT-O1yUinDZHXAuRpTBT8dlGQv4jRvTqlx7ZwsnX-NOARilgNjKXP9yA/exec";
 
-// GET - baca data
+// GET - baca data (diperbarui agar menangkap format antrian & pengaturan)
 const gasGet = async () => {
   try {
     const res = await fetch(GAS_URL + '?action=getAll', { redirect: 'follow' });
     const json = await res.json();
-    return json.data || [];
-  } catch(e) { return []; }
+    return {
+      queues: json.queues || [],
+      settings: json.settings || { runningText: "", playlist: "" }
+    };
+  } catch(e) { return { queues: [], settings: { runningText: "", playlist: "" } }; }
 };
 
 // POST via no-cors (GAS menerima form data)
@@ -108,15 +111,15 @@ function DisplayView({ onBack }) {
   const [queues, setQueues] = useState([]);
   const [currentCall, setCurrentCall] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [runningText, setRunningText] = useState("🚀 Selamat Datang di PPDB SMPN 23 Balikpapan 🚀 Siapkan berkas pendaftaran Anda");
+  
+  const [runningText, setRunningText] = useState("🚀 Menghubungkan... 🚀");
   const [playlist, setPlaylist] = useState(['Jlyt4bCoiJk']);
   const [currentVidIndex, setCurrentVidIndex] = useState(0);
-  const [isStarted, setIsStarted] = useState(false);
   
-  // State untuk Volume
+  const [isStarted, setIsStarted] = useState(false);
   const [vidVolume, setVidVolume] = useState(100);
+  
   const vidVolumeRef = useRef(100);
-
   const playerRef = useRef(null);
   const lastTimestampRef = useRef(null);
   const logoUrl = "https://i.ibb.co.com/mV7Qr7Fw/logo.png";
@@ -137,71 +140,69 @@ function DisplayView({ onBack }) {
   const playCallAudio = useCallback((callData) => {
     if (!('speechSynthesis' in window)) return;
     
-    // Batalkan suara yang sedang berjalan jika ada
-    if (window.speechSynthesis.speaking) {
-      window.speechSynthesis.cancel();
-    }
-    
-    // Kecilkan volume YouTube saat panggilan masuk
+    if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
     try { if (playerRef.current?.setVolume) playerRef.current.setVolume(15); } catch(e) {}
     
     const spelledNumber = String(callData.number).split('').join(' ');
-    
-    // Buat kalimat tunggal
     const singleCall = `Nomor antrian, ${spelledNumber}, silakan menuju loket, ${callData.loket}`;
-    
-    // Gabungkan menjadi 2 kali panggilan berturut-turut dalam satu instruksi suara
-    // Tambahkan titik (.) di tengah agar ada jeda natural sebelum pengulangan
     const utterance = new SpeechSynthesisUtterance(`${singleCall}. ${singleCall}`);
     utterance.lang = 'id-ID';
     utterance.rate = 0.85;
     
-    // Kembalikan ke volume yang diatur user setelah panggilan selesai
     utterance.onend = () => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(vidVolumeRef.current); } catch(e) {} };
-    // Fallback timer diperpanjang menjadi 15 detik (15000ms) karena suara sekarang diputar 2x
     setTimeout(() => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(vidVolumeRef.current); } catch(e) {} }, 15000);
     
-    // Beri jeda waktu 150ms sebelum memulai suara baru
-    setTimeout(() => {
-      window.speechSynthesis.speak(utterance);
-    }, 150);
+    setTimeout(() => { window.speechSynthesis.speak(utterance); }, 150);
   }, []);
 
   useEffect(() => {
     if (!isStarted) return;
     const poll = async () => {
       const data = await gasGet();
-      setQueues(data.map(r => ({ id: String(r.id), number: r.number, status: r.status, loket: r.loket, timestamp: r.timestamp })));
+      
+      // Update data antrian
+      setQueues(data.queues.map(r => ({ id: String(r.id), number: r.number, status: r.status, loket: r.loket, timestamp: r.timestamp })));
 
-      // Urutkan berdasarkan waktu panggilan (yang terbaru di atas)
-      const called = data.filter(r => r.status === 'called').sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      // Update Teks Berjalan dari Database
+      if (data.settings.runningText) {
+        setRunningText(data.settings.runningText);
+      }
+      
+      // Update Playlist dari Database
+      if (data.settings.playlist) {
+        const newPl = data.settings.playlist.split(',').filter(Boolean);
+        setPlaylist(prev => {
+          if (prev.join(',') !== newPl.join(',')) {
+            setCurrentVidIndex(0); // Ulangi dari video pertama jika playlist berubah
+            return newPl;
+          }
+          return prev;
+        });
+      }
+
+      // Logika panggilan suara
+      const called = data.queues.filter(r => r.status === 'called').sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       
       if (called.length > 0) {
         const latest = called[0];
         const latestTime = new Date(latest.timestamp).getTime();
 
-        // 1. KASUS AWAL LOAD/RELOAD: 
         if (lastTimestampRef.current === null) {
           lastTimestampRef.current = latestTime;
           setCurrentCall({ number: latest.number, loket: latest.loket });
           return;
         }
 
-        // 2. KASUS PANGGILAN BARU / ULANGI: 
         if (latestTime > lastTimestampRef.current) {
           lastTimestampRef.current = latestTime;
           const callData = { number: latest.number, loket: latest.loket };
           setCurrentCall(callData);
           playCallAudio(callData);
-        } 
-        // 3. KASUS DIHAPUS: 
-        else if (latestTime < lastTimestampRef.current) {
+        } else if (latestTime < lastTimestampRef.current) {
           lastTimestampRef.current = latestTime;
           setCurrentCall({ number: latest.number, loket: latest.loket });
         }
-
       } else {
-        // Jika data benar-benar kosong (Semua dihapus)
         if (lastTimestampRef.current !== null) {
           lastTimestampRef.current = null;
           setCurrentCall(null);
@@ -284,12 +285,10 @@ function DisplayView({ onBack }) {
               }
             </div>
             
-            {/* Indikator Video */}
             <div className="absolute top-4 left-4 bg-black/50 text-white px-3 py-1 rounded-full text-xs flex items-center gap-2 backdrop-blur-sm z-10 pointer-events-none">
               <Monitor size={14} /> Memutar Video ({currentVidIndex + 1}/{Math.max(1, playlist.length)})
             </div>
 
-            {/* Slider Pengatur Volume Custom (Terlihat saat dihover) */}
             <div className="absolute bottom-4 right-4 bg-black/60 backdrop-blur-md px-4 py-2 rounded-xl flex items-center gap-3 z-20 opacity-50 hover:opacity-100 transition-opacity">
               <Volume2 size={20} className="text-white" />
               <input 
@@ -303,7 +302,6 @@ function DisplayView({ onBack }) {
               />
               <span className="text-white text-xs font-mono w-6">{vidVolume}%</span>
             </div>
-
           </div>
         </div>
         <div className="w-1/3 flex flex-col gap-3">
@@ -330,7 +328,7 @@ function DisplayView({ onBack }) {
         </div>
       </main>
       <footer className="bg-slate-800 text-white py-2 overflow-hidden border-t-4 border-amber-500 z-10">
-        <div className="whitespace-nowrap animate-[marquee_20s_linear_infinite] inline-block text-lg font-medium tracking-wide">{runningText}</div>
+        <div key={runningText} className="whitespace-nowrap animate-[marquee_20s_linear_infinite] inline-block text-lg font-medium tracking-wide">{runningText}</div>
         <style dangerouslySetInnerHTML={{__html: `@keyframes marquee{0%{transform:translateX(100vw)}100%{transform:translateX(-100%)}}`}} />
       </footer>
     </div>
@@ -341,23 +339,32 @@ function DisplayView({ onBack }) {
 function AdminView({ onBack }) {
   const [queues, setQueues] = useState([]);
   const [inputValue, setInputValue] = useState('');
-  const [textInput, setTextInput] = useState("🚀 Selamat Datang di PPDB SMPN 23 Balikpapan 🚀 Siapkan berkas pendaftaran Anda");
-  const [playlist, setPlaylist] = useState(['Jlyt4bCoiJk']);
+  const [textInput, setTextInput] = useState("");
+  const [playlist, setPlaylist] = useState([]);
   const [ytInput, setYtInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState('Menghubungkan...');
 
-  const fetchQueues = async () => {
+  // Dipanggil saat pertama kali load dan setiap 5 detik
+  const fetchQueues = async (isInitial = false) => {
     const data = await gasGet();
     if (data) {
-      setQueues(data.map(r => ({ id: String(r.id), number: r.number, status: r.status, loket: r.loket, timestamp: r.timestamp })));
+      setQueues(data.queues.map(r => ({ id: String(r.id), number: r.number, status: r.status, loket: r.loket, timestamp: r.timestamp })));
+      
+      // Hanya load ke textbox jika ini load pertama, agar tidak mengganggu admin yang sedang mengetik
+      if (isInitial) {
+        setTextInput(data.settings.runningText || "");
+      }
+      // Update visual list playlist
+      setPlaylist(data.settings.playlist ? data.settings.playlist.split(',').filter(Boolean) : []);
+      
       setSyncStatus('Terhubung ✓');
     }
   };
 
   useEffect(() => {
-    fetchQueues();
-    const interval = setInterval(fetchQueues, 5000);
+    fetchQueues(true);
+    const interval = setInterval(() => fetchQueues(false), 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -365,18 +372,11 @@ function AdminView({ onBack }) {
     e.preventDefault();
     if (!inputValue.trim()) return;
     setLoading(true);
-    const newQueue = {
-      action: 'create',
-      id: Date.now().toString(),
-      number: inputValue.trim().toUpperCase(),
-      status: 'pending',
-      loket: '',
-      timestamp: new Date().toISOString()
-    };
+    const newQueue = { action: 'create', id: Date.now().toString(), number: inputValue.trim().toUpperCase(), status: 'pending', loket: '', timestamp: new Date().toISOString() };
     setQueues(prev => [...prev, { ...newQueue }]);
     setInputValue('');
     await gasPost(newQueue);
-    setTimeout(fetchQueues, 1500);
+    setTimeout(() => fetchQueues(false), 1500);
     setLoading(false);
   };
 
@@ -384,20 +384,35 @@ function AdminView({ onBack }) {
     const updatedTimestamp = new Date().toISOString();
     setQueues(prev => prev.map(q => q.id === queueId ? { ...q, status: 'called', loket: loketNumber, timestamp: updatedTimestamp } : q));
     await gasPost({ action: 'update', id: queueId, loket: loketNumber, timestamp: updatedTimestamp });
-    setTimeout(fetchQueues, 1500);
+    setTimeout(() => fetchQueues(false), 1500);
   };
 
   const handleRecall = async (queue) => {
     const newTimestamp = new Date().toISOString();
     setQueues(prev => prev.map(q => q.id === queue.id ? { ...q, timestamp: newTimestamp } : q));
     await gasPost({ action: 'update', id: queue.id, loket: queue.loket, timestamp: newTimestamp });
-    setTimeout(fetchQueues, 1500);
+    setTimeout(() => fetchQueues(false), 1500);
   };
 
   const handleDelete = async (queueId) => {
     setQueues(prev => prev.filter(q => q.id !== queueId));
     await gasPost({ action: 'delete', id: queueId });
-    setTimeout(fetchQueues, 1500);
+    setTimeout(() => fetchQueues(false), 1500);
+  };
+
+  // --- HANDLER PENGATURAN (TEKS & YOUTUBE) ---
+  const saveSettingsToDB = async (newText, newPlaylistArray) => {
+    setSyncStatus('Menyimpan...');
+    await gasPost({ 
+      action: 'updateSettings', 
+      runningText: newText, 
+      playlist: newPlaylistArray.join(',') 
+    });
+    setSyncStatus('Tersimpan ✓');
+  };
+
+  const handleSaveText = () => {
+    saveSettingsToDB(textInput, playlist);
   };
 
   const extractYtId = (url) => {
@@ -420,8 +435,16 @@ function AdminView({ onBack }) {
       if (id && !newPlaylist.includes(id)) { newPlaylist.push(id); count++; }
     });
     if (!count) return alert("URL YouTube tidak valid!");
+    
     setPlaylist(newPlaylist);
     setYtInput('');
+    saveSettingsToDB(textInput, newPlaylist); // Simpan ke DB!
+  };
+
+  const handleRemoveVideo = (videoId) => {
+    const newPlaylist = playlist.filter(v => v !== videoId);
+    setPlaylist(newPlaylist);
+    saveSettingsToDB(textInput, newPlaylist); // Simpan ke DB!
   };
 
   const pendingQueues = queues.filter(q => q.status === 'pending');
@@ -478,6 +501,7 @@ function AdminView({ onBack }) {
             </div>
           </div>
 
+          {/* PANEL PENGATURAN TEKS & YOUTUBE */}
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-5">
             <div>
               <h2 className="text-sm font-bold text-slate-800 mb-2 flex items-center gap-2"><Settings size={16} className="text-amber-500" /> Teks Bawah Layar (Running Text)</h2>
@@ -485,7 +509,9 @@ function AdminView({ onBack }) {
                 <input type="text" value={textInput} onChange={e => setTextInput(e.target.value)}
                   placeholder="Masukkan teks pengumuman..."
                   className="flex-1 bg-slate-50 border border-slate-300 text-sm rounded-lg block p-2.5" />
-                <button className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded-lg text-sm">Ubah Teks</button>
+                <button onClick={handleSaveText} className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded-lg text-sm flex items-center gap-2">
+                  <Save size={16} /> Simpan
+                </button>
               </div>
             </div>
             <hr className="border-slate-100" />
@@ -506,7 +532,7 @@ function AdminView({ onBack }) {
                     <span className="text-xs font-bold text-slate-400">{index + 1}.</span>
                     <img src={`https://img.youtube.com/vi/${videoId}/default.jpg`} alt="thumb" className="w-12 h-9 object-cover rounded" />
                     <span className="flex-1 font-mono text-sm text-slate-700">{videoId}</span>
-                    <button onClick={() => setPlaylist(p => p.filter(v => v !== videoId))} className="text-red-500 hover:bg-red-50 p-1.5 rounded"><Trash2 size={16}/></button>
+                    <button onClick={() => handleRemoveVideo(videoId)} className="text-red-500 hover:bg-red-50 p-1.5 rounded"><Trash2 size={16}/></button>
                   </div>
                 ))}
               </div>
