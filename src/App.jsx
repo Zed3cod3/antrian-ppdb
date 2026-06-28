@@ -33,6 +33,13 @@ function CustomYouTube({ videoId, opts, onReady, onStateChange }) {
   const playerRef = useRef(null);
   const [isApiReady, setIsApiReady] = useState(false);
 
+  // FIX 1: Gunakan useRef agar fungsi deteksi selalu menggunakan data playlist paling baru
+  const onStateChangeRef = useRef(onStateChange);
+  useEffect(() => { onStateChangeRef.current = onStateChange; }, [onStateChange]);
+
+  const onReadyRef = useRef(onReady);
+  useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
+
   useEffect(() => {
     if (!window.YT) {
       const tag = document.createElement('script');
@@ -52,11 +59,12 @@ function CustomYouTube({ videoId, opts, onReady, onStateChange }) {
         playerVars: opts?.playerVars || { autoplay: 1, controls: 0, rel: 0, disablekb: 1, modestbranding: 1, mute: 1 },
         events: {
           onReady: (e) => {
-            if (onReady) onReady({ target: e.target });
+            if (onReadyRef.current) onReadyRef.current({ target: e.target });
             e.target.mute();
             e.target.playVideo();
           },
-          onStateChange: (e) => { if (onStateChange) onStateChange({ data: e.data }); }
+          // FIX 2: Panggil fungsi dari .current agar memori tak usang
+          onStateChange: (e) => { if (onStateChangeRef.current) onStateChangeRef.current({ data: e.data }); }
         }
       });
     }
@@ -235,7 +243,8 @@ function DisplayView({ onBack }) {
     return called.length ? called[called.length - 1].number : '---';
   };
 
-  const opts = { playerVars: { autoplay: 1, controls: 0, rel: 0, disablekb: 1, modestbranding: 1, mute: 1, loop: 1 } };
+  // FIX 3: Hapus 'loop: 1' dari playerVars agar video mau memicu status "ENDED" (Selesai)
+  const opts = { playerVars: { autoplay: 1, controls: 0, rel: 0, disablekb: 1, modestbranding: 1, mute: 1 } };
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans overflow-hidden relative">
