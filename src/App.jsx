@@ -137,11 +137,18 @@ function DisplayView({ onBack }) {
   const playCallAudio = useCallback((callData) => {
     if (!('speechSynthesis' in window)) return;
     
+    // Batalkan suara yang sedang berjalan jika ada
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+    }
+    
     // Kecilkan volume YouTube saat panggilan masuk
     try { if (playerRef.current?.setVolume) playerRef.current.setVolume(15); } catch(e) {}
     
     const spelledNumber = String(callData.number).split('').join(' ');
-    const utterance = new SpeechSynthesisUtterance(`Nomor antrean. ${spelledNumber}. silakan menuju, loket. ${callData.loket}`);
+    
+    // Menggunakan koma agar intonasi jeda lebih natural dan tidak memicu pengulangan
+    const utterance = new SpeechSynthesisUtterance(`Nomor antrian, ${spelledNumber}, silakan menuju loket, ${callData.loket}`);
     utterance.lang = 'id-ID';
     utterance.rate = 0.85;
     
@@ -149,8 +156,11 @@ function DisplayView({ onBack }) {
     utterance.onend = () => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(vidVolumeRef.current); } catch(e) {} };
     setTimeout(() => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(vidVolumeRef.current); } catch(e) {} }, 8000);
     
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
+    // Beri jeda waktu 150ms sebelum memulai suara baru
+    // Ini memperbaiki masalah bug "suara ganda/stuttering" di Google Chrome
+    setTimeout(() => {
+      window.speechSynthesis.speak(utterance);
+    }, 150);
   }, []);
 
   useEffect(() => {
