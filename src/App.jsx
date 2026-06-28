@@ -3,13 +3,13 @@ import { Play, Monitor, Settings, Plus, Mic, CheckCircle2, RotateCcw, Clock, Tra
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbymRfcrs1wV8FsT-O1yUinDZHXAuRpTBT8dlGQv4jRvTqlx7ZwsnX-NOARilgNjKXP9yA/exec";
 
-// GET - baca data
+// GET - baca data (Kembalikan null jika gagal agar tidak merusak logika First Load)
 const gasGet = async () => {
   try {
     const res = await fetch(GAS_URL + '?action=getAll', { redirect: 'follow' });
     const json = await res.json();
-    return json.data || [];
-  } catch(e) { return []; }
+    return json.data || null; 
+  } catch(e) { return null; }
 };
 
 // POST via no-cors (GAS menerima form data)
@@ -113,7 +113,11 @@ function DisplayView({ onBack }) {
   const [currentVidIndex, setCurrentVidIndex] = useState(0);
   const [isStarted, setIsStarted] = useState(false);
   const playerRef = useRef(null);
+  
+  // Ref untuk mengunci suara saat baru reload
   const lastCallRef = useRef('');
+  const isFirstLoad = useRef(true);
+
   const logoUrl = "https://i.ibb.co.com/mV7Qr7Fw/logo.png";
 
   useEffect(() => {
@@ -124,36 +128,66 @@ function DisplayView({ onBack }) {
   const playCallAudio = useCallback((callData) => {
     if (!('speechSynthesis' in window)) return;
     try { if (playerRef.current?.setVolume) playerRef.current.setVolume(15); } catch(e) {}
+    
+    // Eja angka satu per satu (agar dibaca nol nol satu)
     const spelledNumber = String(callData.number).split('').join(' ');
     const utterance = new SpeechSynthesisUtterance(`Nomor antrean. ${spelledNumber}. silakan menuju, loket. ${callData.loket}`);
     utterance.lang = 'id-ID';
     utterance.rate = 0.85;
+    
     utterance.onend = () => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(100); } catch(e) {} };
+    // Fallback durasi maksimal 8 detik
     setTimeout(() => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(100); } catch(e) {} }, 8000);
+    
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
   }, []);
 
-  // Polling GAS setiap 3 detik setelah started
+  // 1. Terima Sinyal Instan dari Panel Admin (BroadcastChannel)
+  useEffect(() => {
+    if (!isStarted || !window.BroadcastChannel) return;
+    const bc = new BroadcastChannel('antrian_sync');
+    bc.onmessage = (e) => {
+      if (e.data.type === 'CALL') {
+        const { number, loket, timestamp } = e.data;
+        lastCallRef.current = timestamp; // Update ref agar polling tidak baca ulang
+        const callData = { number, loket };
+        setCurrentCall(callData);
+        playCallAudio(callData);
+      }
+    };
+    return () => bc.close();
+  }, [isStarted, playCallAudio]);
+
+  // 2. Polling Reguler (Untuk sinkronisasi beda PC/Jaringan)
   useEffect(() => {
     if (!isStarted) return;
     const poll = async () => {
       const data = await gasGet();
+      if (!data) return; // Hentikan jika fetch gagal (agar first load tidak terpicu duluan)
+
       setQueues(data.map(r => ({ id: String(r.id), number: r.number, status: r.status, loket: r.loket, timestamp: r.timestamp })));
 
-      // Cari panggilan terbaru berdasarkan timestamp
       const called = data.filter(r => r.status === 'called').sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
       if (called.length > 0) {
         const latest = called[0];
-        const callKey = `${latest.id}-${latest.loket}`;
-        if (callKey !== lastCallRef.current) {
+        const callKey = latest.timestamp;
+        
+        if (isFirstLoad.current) {
+          // SAAT RELOAD: Tampilkan UI saja, jangan putar audio
+          lastCallRef.current = callKey;
+          setCurrentCall({ number: latest.number, loket: latest.loket });
+        } else if (callKey !== lastCallRef.current) {
+          // JIKA ADA PANGGILAN BARU: Tampilkan UI dan putar audio
           lastCallRef.current = callKey;
           const callData = { number: latest.number, loket: latest.loket };
           setCurrentCall(callData);
           playCallAudio(callData);
         }
       }
+      isFirstLoad.current = false;
     };
+    
     poll();
     const interval = setInterval(poll, 3000);
     return () => clearInterval(interval);
@@ -161,9 +195,9 @@ function DisplayView({ onBack }) {
 
   const onReady = (e) => {
     playerRef.current = e.target;
-    // Unmute setelah user interaksi
     try { e.target.unMute(); e.target.setVolume(100); e.target.playVideo(); } catch(err) {}
   };
+  
   const onStateChange = (e) => {
     if (e.data === 0) {
       if (playlist.length > 1) setCurrentVidIndex(p => (p + 1) % playlist.length);
@@ -292,7 +326,6 @@ function AdminView({ onBack }) {
       loket: '',
       timestamp: new Date().toISOString()
     };
-    // Optimistic update
     setQueues(prev => [...prev, { ...newQueue }]);
     setInputValue('');
     await gasPost(newQueue);
@@ -300,15 +333,36 @@ function AdminView({ onBack }) {
     setLoading(false);
   };
 
-  const handleCallQueue = async (queueId, loketNumber) => {
-    // Optimistic update
-    setQueues(prev => prev.map(q => q.id === queueId ? { ...q, status: 'called', loket: loketNumber, timestamp: new Date().toISOString() } : q));
-    await gasPost({ action: 'update', id: queueId, loket: loketNumber, timestamp: new Date().toISOString() });
+  const handleCallQueue = async (queueId, loketNumber, queueNumber) => {
+    const timestamp = new Date().toISOString(); 
+    
+    // UI Update instan
+    setQueues(prev => prev.map(q => q.id === queueId ? { ...q, status: 'called', loket: loketNumber, timestamp } : q));
+    
+    // Broadcast instan
+    if (window.BroadcastChannel) {
+      const bc = new BroadcastChannel('antrian_sync');
+      bc.postMessage({ type: 'CALL', id: queueId, number: queueNumber, loket: loketNumber, timestamp });
+      bc.close();
+    }
+
+    // Backend post
+    await gasPost({ action: 'update', id: queueId, loket: loketNumber, timestamp });
     setTimeout(fetchQueues, 1500);
   };
 
   const handleRecall = async (queue) => {
-    await gasPost({ action: 'update', id: queue.id, loket: queue.loket, timestamp: new Date().toISOString() });
+    const timestamp = new Date().toISOString(); 
+    
+    // Broadcast instan
+    if (window.BroadcastChannel) {
+      const bc = new BroadcastChannel('antrian_sync');
+      bc.postMessage({ type: 'CALL', id: queue.id, number: queue.number, loket: queue.loket, timestamp });
+      bc.close();
+    }
+
+    // Backend post
+    await gasPost({ action: 'update', id: queue.id, loket: queue.loket, timestamp });
     setTimeout(fetchQueues, 1500);
   };
 
@@ -365,7 +419,7 @@ function AdminView({ onBack }) {
             <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2"><Plus size={20} className="text-blue-500" /> Input Nomor</h2>
             <form onSubmit={handleAddQueue} className="flex gap-3">
               <input type="text" value={inputValue} onChange={e => setInputValue(e.target.value)}
-                placeholder="Contoh: A001"
+                placeholder="Contoh: 001"
                 className="flex-1 bg-slate-50 border border-slate-300 text-lg rounded-xl focus:ring-blue-500 block p-3 uppercase font-mono" required />
               <button type="submit" disabled={loading} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl shadow-md disabled:opacity-50">
                 {loading ? '...' : 'Tambah'}
@@ -385,7 +439,7 @@ function AdminView({ onBack }) {
                   <div className="font-mono text-2xl font-black text-slate-700">{q.number}</div>
                   <div className="flex gap-2">
                     {[1, 2, 3].map(loket => (
-                      <button key={loket} onClick={() => handleCallQueue(q.id, loket)}
+                      <button key={loket} onClick={() => handleCallQueue(q.id, loket, q.number)}
                         className="bg-blue-100 hover:bg-blue-600 hover:text-white text-blue-700 font-bold py-2 px-4 rounded-lg transition-colors border border-blue-200">
                         L{loket}
                       </button>
