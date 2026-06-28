@@ -1,0 +1,623 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Play, Volume2, Monitor, Settings, Users, Plus, Mic, CheckCircle2, RotateCcw, Clock, Trash2 } from 'lucide-react';
+
+// Komponen YouTube Bawaan (Menggantikan library eksternal yang error)
+function CustomYouTube({ videoId, opts, onReady, onStateChange, isStarted }) {
+  const containerRef = useRef(null);
+  const playerRef = useRef(null);
+  const [isApiReady, setIsApiReady] = useState(false);
+
+  useEffect(() => {
+    // Memuat Script YouTube IFrame API secara dinamis
+    if (!window.YT) {
+      const tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      const firstScriptTag = document.getElementsByTagName('script')[0];
+      firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+      
+      window.onYouTubeIframeAPIReady = () => {
+        setIsApiReady(true);
+      };
+    } else if (window.YT && window.YT.Player) {
+      setIsApiReady(true);
+    }
+
+    return () => {
+      // Hapus player ketika komponen dibongkar
+      if (playerRef.current && typeof playerRef.current.destroy === 'function') {
+         playerRef.current.destroy();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    // Inisialisasi Player saat script siap
+    if (isApiReady && containerRef.current && !playerRef.current) {
+      playerRef.current = new window.YT.Player(containerRef.current, {
+        videoId: videoId,
+        playerVars: opts?.playerVars || {
+          autoplay: 0, controls: 0, rel: 0, disablekb: 1, modestbranding: 1
+        },
+        events: {
+          onReady: (e) => {
+            if (onReady) onReady({ target: e.target });
+            if (isStarted) e.target.playVideo();
+          },
+          onStateChange: (e) => {
+            if (onStateChange) onStateChange({ data: e.data });
+          }
+        }
+      });
+    }
+  }, [isApiReady]);
+
+  useEffect(() => {
+    // Ganti video jika ID berubah dari playlist
+    if (playerRef.current && playerRef.current.loadVideoById) {
+      try {
+        playerRef.current.loadVideoById(videoId);
+      } catch (e) {}
+    }
+  }, [videoId]);
+
+  useEffect(() => {
+    // Memutar paksa saat status dimulai
+     if (isStarted && playerRef.current && typeof playerRef.current.playVideo === 'function') {
+         try {
+            playerRef.current.playVideo();
+         } catch(e) {}
+     }
+  }, [isStarted]);
+
+  return (
+    <div className="w-full h-full relative bg-black">
+      <div ref={containerRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+    </div>
+  );
+}
+
+// --- KOMPONEN UTAMA (ROUTER) ---
+export default function App() {
+  const [view, setView] = useState('home');
+
+  if (view === 'display') return <DisplayView onBack={() => setView('home')} />;
+  if (view === 'admin') return <AdminView onBack={() => setView('home')} />;
+
+  // Logo Sekolah (Asli, tanpa kotak/background)
+  const logoUrl = "https://i.ibb.co.com/mV7Qr7Fw/logo.png";
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
+      <div className="bg-white rounded-2xl shadow-xl p-8 max-w-2xl w-full text-center border-t-8 border-blue-600">
+        
+        <img 
+          src={logoUrl}
+          alt="Logo Sekolah" 
+          className="w-32 h-auto mx-auto mb-6 object-contain drop-shadow-md"
+          onError={(e) => { e.target.style.display = 'none'; }} 
+        />
+
+        <h1 className="text-4xl font-extrabold text-slate-800 mb-2">Sistem Antrian PPDB</h1>
+        <h2 className="text-2xl font-semibold text-blue-600 mb-8">SMPN 23 Balikpapan</h2>
+        
+        <p className="text-slate-600 mb-10">
+          Silakan pilih mode tampilan. Buka mode Admin di satu tab, dan mode Layar di tab lain untuk melihat sinkronisasi langsung.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <button
+            onClick={() => setView('admin')}
+            className="flex flex-col items-center justify-center p-8 bg-blue-50 rounded-xl hover:bg-blue-100 transition-colors border-2 border-blue-200 group"
+          >
+            <div className="bg-blue-600 p-4 rounded-full text-white mb-4 group-hover:scale-110 transition-transform">
+              <Settings size={32} />
+            </div>
+            <span className="text-xl font-bold text-slate-800">Panel Petugas</span>
+            <span className="text-sm text-slate-500 mt-2">Kelola antrian & panggil</span>
+          </button>
+
+          <button
+            onClick={() => setView('display')}
+            className="flex flex-col items-center justify-center p-8 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-colors border-2 border-indigo-200 group"
+          >
+            <div className="bg-indigo-600 p-4 rounded-full text-white mb-4 group-hover:scale-110 transition-transform">
+              <Monitor size={32} />
+            </div>
+            <span className="text-xl font-bold text-slate-800">Layar Murid</span>
+            <span className="text-sm text-slate-500 mt-2">Tampilan TV & Video</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- KOMPONEN LAYAR DISPLAY (MURID) ---
+function DisplayView({ onBack }) {
+  const [queues, setQueues] = useState([]);
+  const [currentCall, setCurrentCall] = useState(null);
+  const [isStarted, setIsStarted] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  
+  const [runningText, setRunningText] = useState("🚀 Selamat Datang di PPDB SMPN 23 Balikpapan 🚀 Siapkan berkas pendaftaran Anda");
+  
+  const [playlist, setPlaylist] = useState(['Jlyt4bCoiJk']); 
+  const [currentVidIndex, setCurrentVidIndex] = useState(0);
+  
+  const playerRef = useRef(null); 
+  const logoUrl = "https://i.ibb.co.com/mV7Qr7Fw/logo.png";
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const channel = new BroadcastChannel('ppdb-channel');
+    
+    channel.onmessage = (event) => {
+      if (event.data.type === 'SYNC_QUEUES') {
+          setQueues(event.data.payload);
+      }
+      else if (event.data.type === 'SYNC_TEXT') {
+          setRunningText(event.data.payload);
+      }
+      else if (event.data.type === 'SYNC_PLAYLIST') {
+          const newPlaylist = event.data.payload;
+          setPlaylist(newPlaylist);
+          setCurrentVidIndex(prev => prev >= newPlaylist.length ? 0 : prev);
+      }
+      else if (event.data.type === 'CALL_NUMBER') {
+        setCurrentCall(event.data.payload);
+        playCallAudio(event.data.payload);
+      }
+    };
+
+    channel.postMessage({ type: 'REQUEST_SYNC' });
+    return () => channel.close();
+  }, []);
+
+  const playCallAudio = useCallback((callData) => {
+    if (!('speechSynthesis' in window)) return;
+
+    try {
+      if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
+        playerRef.current.setVolume(15);
+      }
+    } catch(e) {}
+
+    const spelledNumber = callData.number.split('').join(' ');
+    const textToSpeak = `Nomor antrean. ${spelledNumber}. silakan menuju, loket. ${callData.loket}`;
+    
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    utterance.lang = 'id-ID';
+    utterance.rate = 0.85; 
+
+    utterance.onend = () => {
+      try {
+        if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
+          playerRef.current.setVolume(100);
+        }
+      } catch(e) {}
+    };
+
+    setTimeout(() => {
+      try {
+        if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
+          playerRef.current.setVolume(100);
+        }
+      } catch(e) {}
+    }, 8000);
+
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  const handleStart = () => {
+    setIsStarted(true);
+  };
+
+  const opts = {
+    playerVars: {
+      autoplay: 0,
+      controls: 0,
+      rel: 0,
+      disablekb: 1,
+      modestbranding: 1,
+      loop: 1,
+    },
+  };
+
+  const onReady = (event) => {
+    playerRef.current = event.target;
+  };
+
+  const onStateChange = (event) => {
+     // Kode 0 artinya video ENDED
+     if (event.data === 0) {
+         if (playlist.length > 1) {
+             // Jika ada lebih dari 1 video, pindah ke video berikutnya
+             setCurrentVidIndex(prev => (prev + 1) % playlist.length);
+         } else {
+             // Jika hanya 1 video, putar ulang dari awal
+             try {
+               if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+                 playerRef.current.seekTo(0);
+                 playerRef.current.playVideo();
+               }
+             } catch(e) {}
+         }
+     }
+  };
+
+  const getLastCalled = (loketNum) => {
+    const calledQueues = queues.filter(q => q.status === 'called' && q.loket === loketNum);
+    if (calledQueues.length === 0) return '---';
+    return calledQueues[calledQueues.length - 1].number;
+  };
+
+  return (
+    // Menggunakan p-3 agar ukurannya pas (fit screen) tanpa harus di-zoom out.
+    <div className="min-h-screen bg-slate-100 flex flex-col font-sans overflow-hidden relative">
+      
+      {!isStarted && (
+        <div className="absolute inset-0 bg-slate-900 z-50 flex items-center justify-center p-6 flex-col backdrop-blur-sm">
+          <div className="bg-white p-8 rounded-2xl text-center max-w-md shadow-2xl">
+            <Monitor size={64} className="mx-auto text-blue-600 mb-6" />
+            <h2 className="text-2xl font-bold text-slate-800 mb-4">Mulai Tampilan Layar</h2>
+            <p className="text-slate-600 mb-8">
+              Klik tombol di bawah ini untuk memulai sistem layar penuh dan suara antrean.
+            </p>
+            <button 
+              onClick={handleStart}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-3 transition-transform hover:scale-105 active:scale-95"
+            >
+              <Play size={24} /> Mulai Layar & Suara
+            </button>
+            <button onClick={onBack} className="mt-4 text-slate-500 hover:text-slate-700 text-sm">Kembali ke Menu Utama</button>
+          </div>
+        </div>
+      )}
+
+      {/* Header dengan Logo Murni (tanpa background putih/shape) */}
+      <header className="bg-blue-700 text-white p-3 shadow-lg flex justify-between items-center z-10">
+        <div className="flex items-center gap-4">
+          <img src={logoUrl} alt="Logo" className="h-16 w-auto object-contain drop-shadow-md" />
+          <div>
+            <h1 className="text-2xl font-extrabold uppercase tracking-wide">PPDB SMPN 23 BALIKPAPAN</h1>
+            <p className="text-blue-100 text-xs font-medium">Tahun Ajaran 2026/2027</p>
+          </div>
+        </div>
+        <div className="text-right flex items-center gap-2 bg-blue-800 px-3 py-1.5 rounded-xl border border-blue-600">
+          <Clock size={20} className="text-blue-300" />
+          <div className="text-2xl font-bold font-mono tracking-wider">
+            {currentTime.toLocaleTimeString('id-ID', { hour12: false })}
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 flex p-3 gap-3 overflow-hidden">
+        {/* Kontainer Video Kiri */}
+        <div className="w-2/3 flex flex-col gap-3">
+          <div className="flex-1 bg-black rounded-2xl overflow-hidden shadow-xl relative border-4 border-slate-300">
+            {/* Wrapper YouTube Custom agar pas dan tidak terpotong */}
+            <div className="absolute inset-0 w-full h-full bg-black">
+               {playlist.length > 0 ? (
+                 <CustomYouTube 
+                   videoId={playlist[currentVidIndex]} 
+                   opts={opts} 
+                   onReady={onReady}
+                   onStateChange={onStateChange}
+                   isStarted={isStarted}
+                 />
+               ) : (
+                 <div className="flex items-center justify-center h-full text-slate-500 text-sm">Playlist Kosong</div>
+               )}
+            </div>
+            
+            <div className="absolute top-4 left-4 bg-black/50 text-white px-3 py-1 rounded-full text-xs flex items-center gap-2 backdrop-blur-sm z-10">
+              <Monitor size={14} /> Memutar Video ({currentVidIndex + 1}/{Math.max(1, playlist.length)})
+            </div>
+          </div>
+        </div>
+
+        {/* Panel Kanan - Loket Status */}
+        <div className="w-1/3 flex flex-col gap-3">
+          <div className="bg-gradient-to-br from-indigo-600 to-blue-700 rounded-2xl p-4 shadow-xl text-center text-white flex flex-col justify-center items-center relative overflow-hidden border-4 border-indigo-400">
+            <div className="absolute -right-10 -top-10 text-white/10">
+              <Mic size={120} />
+            </div>
+            
+            <h2 className="text-lg font-bold mb-1 uppercase tracking-widest text-indigo-200">Panggilan Saat Ini</h2>
+            <div className="text-6xl font-black tracking-tighter my-2 drop-shadow-lg">
+              {currentCall ? currentCall.number : '---'}
+            </div>
+            <div className="bg-white/20 px-5 py-1.5 rounded-full backdrop-blur-sm text-lg font-bold border border-white/30 z-10">
+              LOKET {currentCall ? currentCall.loket : '-'}
+            </div>
+          </div>
+
+          <div className="flex-1 flex flex-col gap-3">
+            {[1, 2, 3].map((loket) => (
+              <div key={loket} className="flex-1 bg-white rounded-2xl p-3 flex items-center shadow-md border border-slate-200">
+                <div className="bg-amber-500 w-16 h-full rounded-xl flex items-center justify-center flex-col text-white shadow-inner">
+                  <span className="text-xs font-bold uppercase opacity-80">Loket</span>
+                  <span className="text-3xl font-black">{loket}</span>
+                </div>
+                <div className="flex-1 text-center">
+                  <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider block mb-0.5">Antrian Terakhir</span>
+                  <span className="text-4xl font-extrabold text-slate-800 font-mono tracking-tighter">
+                    {getLastCalled(loket)}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </main>
+
+      {/* Footer Running Text yang bisa diganti Admin */}
+      <footer className="bg-slate-800 text-white py-2 overflow-hidden border-t-4 border-amber-500 z-10">
+        <div className="whitespace-nowrap animate-[marquee_20s_linear_infinite] inline-block text-lg font-medium tracking-wide">
+          {runningText}
+        </div>
+        <style dangerouslySetInnerHTML={{__html: `
+          @keyframes marquee {
+            0% { transform: translateX(100vw); }
+            100% { transform: translateX(-100%); }
+          }
+        `}} />
+      </footer>
+    </div>
+  );
+}
+
+// --- KOMPONEN PANEL ADMIN (PETUGAS) ---
+function AdminView({ onBack }) {
+  const [queues, setQueues] = useState([]);
+  const [inputValue, setInputValue] = useState('');
+  
+  const [runningText, setRunningText] = useState("🚀 Selamat Datang di PPDB SMPN 23 Balikpapan 🚀 Siapkan berkas pendaftaran Anda");
+  const [textInput, setTextInput] = useState(runningText);
+  
+  const [playlist, setPlaylist] = useState(['Jlyt4bCoiJk']); 
+  const [ytInput, setYtInput] = useState('');
+  
+  const channelRef = useRef(null);
+
+  useEffect(() => {
+    channelRef.current = new BroadcastChannel('ppdb-channel');
+    channelRef.current.onmessage = (event) => {
+      if (event.data.type === 'REQUEST_SYNC') {
+        broadcastQueues(queues);
+        broadcastText(runningText);
+        broadcastPlaylist(playlist);
+      }
+    };
+    return () => channelRef.current.close();
+  }, [queues, runningText, playlist]);
+
+  const broadcastQueues = (data) => channelRef.current?.postMessage({ type: 'SYNC_QUEUES', payload: data });
+  const broadcastText = (data) => channelRef.current?.postMessage({ type: 'SYNC_TEXT', payload: data });
+  const broadcastPlaylist = (data) => channelRef.current?.postMessage({ type: 'SYNC_PLAYLIST', payload: data });
+
+  const handleUpdateText = (e) => {
+    e.preventDefault();
+    setRunningText(textInput);
+    broadcastText(textInput);
+  };
+  
+  // Fungsi ekstraksi ID (Mendukung link koma banyak video)
+  const extractYtId = (url) => {
+      let id = url.trim();
+      if (id.includes('youtube.com') || id.includes('youtu.be')) {
+          try {
+              const parsed = new URL(id);
+              if (parsed.hostname.includes('youtu.be')) {
+                  id = parsed.pathname.slice(1);
+              } else {
+                  id = parsed.searchParams.get('v') || id;
+              }
+          } catch(e) {}
+      }
+      return (id.length === 11) ? id : null;
+  };
+
+  const handleAddVideo = (e) => {
+    e.preventDefault();
+    const urls = ytInput.split(','); 
+    let addedCount = 0;
+    let newPlaylist = [...playlist];
+
+    urls.forEach(url => {
+        const newId = extractYtId(url);
+        if (newId && !newPlaylist.includes(newId)) {
+            newPlaylist.push(newId);
+            addedCount++;
+        }
+    });
+    
+    if (addedCount === 0) return alert("URL YouTube tidak valid!");
+
+    setPlaylist(newPlaylist);
+    broadcastPlaylist(newPlaylist);
+    setYtInput('');
+  };
+
+  const handleRemoveVideo = (idToRemove) => {
+    const newPlaylist = playlist.filter(id => id !== idToRemove);
+    setPlaylist(newPlaylist);
+    broadcastPlaylist(newPlaylist);
+  };
+
+  const handleAddQueue = (e) => {
+    e.preventDefault();
+    if (!inputValue.trim()) return;
+    const newQueue = { id: Date.now().toString(), number: inputValue.trim().toUpperCase(), status: 'pending', loket: null, timestamp: new Date().toISOString() };
+    const updated = [...queues, newQueue];
+    setQueues(updated);
+    broadcastQueues(updated);
+    setInputValue('');
+  };
+
+  const handleCallQueue = (queueId, loketNumber) => {
+    const queueToCall = queues.find(q => q.id === queueId);
+    if (!queueToCall) return;
+    const updatedQueues = queues.map(q => q.id === queueId ? { ...q, status: 'called', loket: loketNumber } : q);
+    setQueues(updatedQueues);
+    broadcastQueues(updatedQueues);
+    channelRef.current?.postMessage({ type: 'CALL_NUMBER', payload: { number: queueToCall.number, loket: loketNumber } });
+  };
+
+  const handleRecall = (queue) => {
+    channelRef.current?.postMessage({ type: 'CALL_NUMBER', payload: { number: queue.number, loket: queue.loket } });
+  };
+
+  const handleDelete = (queueId) => {
+    const updatedQueues = queues.filter(q => q.id !== queueId);
+    setQueues(updatedQueues);
+    broadcastQueues(updatedQueues);
+  };
+
+  const pendingQueues = queues.filter(q => q.status === 'pending');
+  const calledQueues = queues.filter(q => q.status === 'called').sort((a,b) => b.timestamp.localeCompare(a.timestamp));
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex flex-col">
+      <header className="bg-white border-b shadow-sm px-6 py-4 flex justify-between items-center sticky top-0 z-10">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
+             &larr; Kembali
+          </button>
+          <div className="h-6 w-px bg-slate-300"></div>
+          <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <Settings className="text-blue-600" size={24} /> Panel Admin
+          </h1>
+        </div>
+        <div className="text-sm font-medium text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200 flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div> Aktif
+        </div>
+      </header>
+
+      <main className="flex-1 p-6 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="lg:col-span-7 flex flex-col gap-6">
+          
+          {/* Input Nomor Antrian - sekarang di atas */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+              <Plus size={20} className="text-blue-500" /> Input Nomor
+            </h2>
+            <form onSubmit={handleAddQueue} className="flex gap-3">
+              <input 
+                type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+                placeholder="Contoh: A001"
+                className="flex-1 bg-slate-50 border border-slate-300 text-lg rounded-xl focus:ring-blue-500 block p-3 uppercase font-mono" required
+              />
+              <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl shadow-md">
+                Tambah
+              </button>
+            </form>
+          </div>
+
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex-1">
+             <h2 className="text-lg font-bold text-slate-800 mb-4 flex justify-between items-center">
+              <span>Daftar Tunggu</span>
+              <span className="bg-amber-100 text-amber-700 text-xs py-1 px-3 rounded-full font-bold">{pendingQueues.length} Antrian</span>
+            </h2>
+            <div className="space-y-3 overflow-y-auto max-h-[50vh] pr-2">
+                {pendingQueues.map((q) => (
+                  <div key={q.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">
+                    <div className="font-mono text-2xl font-black text-slate-700">{q.number}</div>
+                    <div className="flex gap-2">
+                      {[1, 2, 3].map(loket => (
+                        <button key={loket} onClick={() => handleCallQueue(q.id, loket)} className="bg-blue-100 hover:bg-blue-600 hover:text-white text-blue-700 font-bold py-2 px-4 rounded-lg transition-colors border border-blue-200">
+                          L{loket}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+
+          {/* Teks Bawah Layar & Playlist Video - paling bawah */}
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-5">
+            <div>
+              <h2 className="text-sm font-bold text-slate-800 mb-2 flex items-center gap-2">
+                <Settings size={16} className="text-amber-500" /> Teks Bawah Layar (Running Text)
+              </h2>
+              <form onSubmit={handleUpdateText} className="flex gap-2">
+                <input 
+                  type="text" value={textInput} onChange={(e) => setTextInput(e.target.value)}
+                  placeholder="Masukkan teks pengumuman..."
+                  className="flex-1 bg-slate-50 border border-slate-300 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5" required
+                />
+                <button type="submit" className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded-lg text-sm">
+                  Ubah Teks
+                </button>
+              </form>
+            </div>
+            
+            <hr className="border-slate-100" />
+            
+            <div>
+              <h2 className="text-sm font-bold text-slate-800 mb-2 flex items-center justify-between">
+                <span className="flex items-center gap-2"><Play size={16} className="text-red-500" /> Antrian Playlist Video YouTube</span>
+                <span className="text-xs bg-slate-100 px-2 py-1 rounded text-slate-500">{playlist.length} Video</span>
+              </h2>
+              <form onSubmit={handleAddVideo} className="flex gap-2 mb-3">
+                <input 
+                  type="text" value={ytInput} onChange={(e) => setYtInput(e.target.value)}
+                  placeholder="Link YouTube (Bisa banyak, pisah koma)"
+                  className="flex-1 bg-slate-50 border border-slate-300 text-sm rounded-lg focus:ring-red-500 block p-2.5" required
+                />
+                <button type="submit" className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 text-sm">
+                  <Plus size={16}/> Tambah
+                </button>
+              </form>
+              <div className="flex flex-col gap-2 max-h-40 overflow-y-auto pr-1">
+                {playlist.map((videoId, index) => (
+                   <div key={videoId} className="flex items-center gap-3 bg-slate-50 p-2 rounded-lg border border-slate-200">
+                      <span className="text-xs font-bold text-slate-400">{index + 1}.</span>
+                      <img src={`https://img.youtube.com/vi/${videoId}/default.jpg`} alt="thumb" className="w-12 h-9 object-cover rounded bg-slate-200" />
+                      <span className="flex-1 font-mono text-sm text-slate-700">{videoId}</span>
+                      <button onClick={() => handleRemoveVideo(videoId)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="Hapus">
+                         <Trash2 size={16}/>
+                      </button>
+                   </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="lg:col-span-5">
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-full flex flex-col">
+            <h2 className="text-lg font-bold text-slate-800 mb-4 flex justify-between items-center">
+              <span>Riwayat</span>
+              <span className="bg-emerald-100 text-emerald-700 text-xs py-1 px-3 rounded-full font-bold">{calledQueues.length} Selesai</span>
+            </h2>
+            <div className="space-y-3 overflow-y-auto flex-1 pr-2">
+                {calledQueues.map((q) => (
+                  <div key={q.id} className="flex items-center justify-between p-3 bg-emerald-50/50 rounded-xl border border-emerald-100">
+                    <div>
+                      <div className="font-mono text-xl font-bold text-slate-800">{q.number}</div>
+                      <div className="text-xs font-semibold text-emerald-600 flex items-center gap-1 mt-1"><CheckCircle2 size={12} /> Loket {q.loket}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => handleRecall(q)} className="flex items-center gap-1 bg-white hover:bg-slate-100 text-slate-700 py-2 px-3 rounded-lg border border-slate-300 shadow-sm text-sm">
+                        <RotateCcw size={16} /> Ulangi
+                      </button>
+                      <button onClick={() => handleDelete(q.id)} className="flex items-center bg-white hover:bg-red-50 text-red-600 py-2 px-3 rounded-lg border border-red-200 shadow-sm">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
