@@ -1,23 +1,26 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Play, Monitor, Settings, Plus, Mic, CheckCircle2, RotateCcw, Clock, Trash2 } from 'lucide-react';
 
-// =============================================
-// GANTI URL INI DENGAN URL GAS KAMU
-// =============================================
 const GAS_URL = "https://script.google.com/macros/s/AKfycbymRfcrs1wV8FsT-O1yUinDZHXAuRpTBT8dlGQv4jRvTqlx7ZwsnX-NOARilgNjKXP9yA/exec";
 
-// Helper: GET data dari GAS
+// GET - baca data
 const gasGet = async () => {
-  const res = await fetch(GAS_URL);
-  const json = await res.json();
-  return json.data || [];
+  try {
+    const res = await fetch(GAS_URL + '?action=getAll', { redirect: 'follow' });
+    const json = await res.json();
+    return json.data || [];
+  } catch(e) { return []; }
 };
 
-// Helper: POST data ke GAS
-const gasPost = async (payload) => {
-  await fetch(GAS_URL, {
+// POST via no-cors (GAS menerima form data)
+const gasPost = (payload) => {
+  const params = new URLSearchParams();
+  Object.keys(payload).forEach(k => params.append(k, payload[k]));
+  return fetch(GAS_URL, {
     method: 'POST',
-    body: JSON.stringify(payload),
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
   });
 };
 
@@ -33,12 +36,10 @@ function CustomYouTube({ videoId, opts, onReady, onStateChange }) {
       tag.src = 'https://www.youtube.com/iframe_api';
       document.getElementsByTagName('script')[0].parentNode.insertBefore(tag, document.getElementsByTagName('script')[0]);
       window.onYouTubeIframeAPIReady = () => setIsApiReady(true);
-    } else if (window.YT && window.YT.Player) {
+    } else if (window.YT?.Player) {
       setIsApiReady(true);
     }
-    return () => {
-      if (playerRef.current?.destroy) playerRef.current.destroy();
-    };
+    return () => { if (playerRef.current?.destroy) playerRef.current.destroy(); };
   }, []);
 
   useEffect(() => {
@@ -60,7 +61,7 @@ function CustomYouTube({ videoId, opts, onReady, onStateChange }) {
 
   useEffect(() => {
     if (playerRef.current?.loadVideoById) {
-      try { playerRef.current.loadVideoById(videoId); } catch (e) {}
+      try { playerRef.current.loadVideoById(videoId); } catch(e) {}
     }
   }, [videoId]);
 
@@ -81,7 +82,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
       <div className="bg-white rounded-2xl shadow-xl p-8 max-w-2xl w-full text-center border-t-8 border-blue-600">
-        <img src={logoUrl} alt="Logo Sekolah" className="w-32 h-auto mx-auto mb-6 object-contain drop-shadow-md" onError={(e) => { e.target.style.display = 'none'; }} />
+        <img src={logoUrl} alt="Logo" className="w-32 h-auto mx-auto mb-6 object-contain drop-shadow-md" onError={(e) => e.target.style.display='none'} />
         <h1 className="text-4xl font-extrabold text-slate-800 mb-2">Sistem Antrian PPDB</h1>
         <h2 className="text-2xl font-semibold text-blue-600 mb-8">SMPN 23 Balikpapan</h2>
         <p className="text-slate-600 mb-10">Silakan pilih mode tampilan. Admin dan Layar Murid bisa dibuka di device berbeda.</p>
@@ -102,108 +103,85 @@ export default function App() {
   );
 }
 
-// --- LAYAR DISPLAY (MURID) ---
+// --- LAYAR DISPLAY ---
 function DisplayView({ onBack }) {
   const [queues, setQueues] = useState([]);
   const [currentCall, setCurrentCall] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [runningText] = useState("🚀 Selamat Datang di PPDB SMPN 23 Balikpapan 🚀 Siapkan berkas pendaftaran Anda");
+  const [runningText, setRunningText] = useState("🚀 Selamat Datang di PPDB SMPN 23 Balikpapan 🚀 Siapkan berkas pendaftaran Anda");
   const [playlist, setPlaylist] = useState(['Jlyt4bCoiJk']);
   const [currentVidIndex, setCurrentVidIndex] = useState(0);
   const [isStarted, setIsStarted] = useState(false);
   const playerRef = useRef(null);
-  const lastCallIdRef = useRef(null);
+  const lastCallRef = useRef('');
   const logoUrl = "https://i.ibb.co.com/mV7Qr7Fw/logo.png";
 
-  // Jam
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // Polling GAS setiap 3 detik
+  const playCallAudio = useCallback((callData) => {
+    if (!('speechSynthesis' in window)) return;
+    try { if (playerRef.current?.setVolume) playerRef.current.setVolume(15); } catch(e) {}
+    const spelledNumber = String(callData.number).split('').join(' ');
+    const utterance = new SpeechSynthesisUtterance(`Nomor antrean. ${spelledNumber}. silakan menuju, loket. ${callData.loket}`);
+    utterance.lang = 'id-ID';
+    utterance.rate = 0.85;
+    utterance.onend = () => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(100); } catch(e) {} };
+    setTimeout(() => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(100); } catch(e) {} }, 8000);
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  // Polling GAS setiap 3 detik setelah started
   useEffect(() => {
     if (!isStarted) return;
     const poll = async () => {
-      try {
-        const data = await gasGet();
-        setQueues(data.map(row => ({
-          id: String(row.id),
-          number: row.number,
-          status: row.status,
-          loket: row.loket,
-          timestamp: row.timestamp,
-        })));
+      const data = await gasGet();
+      setQueues(data.map(r => ({ id: String(r.id), number: r.number, status: r.status, loket: r.loket, timestamp: r.timestamp })));
 
-        // Cek panggilan terbaru
-        const called = data.filter(r => r.status === 'called').sort((a, b) => b.timestamp?.localeCompare(a.timestamp));
-        if (called.length > 0) {
-          const latest = called[0];
-          if (String(latest.id) !== lastCallIdRef.current) {
-            lastCallIdRef.current = String(latest.id);
-            const callData = { number: latest.number, loket: latest.loket };
-            setCurrentCall(callData);
-            playCallAudio(callData);
-          }
+      // Cari panggilan terbaru berdasarkan timestamp
+      const called = data.filter(r => r.status === 'called').sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+      if (called.length > 0) {
+        const latest = called[0];
+        const callKey = `${latest.id}-${latest.loket}`;
+        if (callKey !== lastCallRef.current) {
+          lastCallRef.current = callKey;
+          const callData = { number: latest.number, loket: latest.loket };
+          setCurrentCall(callData);
+          playCallAudio(callData);
         }
-      } catch (e) {}
+      }
     };
     poll();
     const interval = setInterval(poll, 3000);
     return () => clearInterval(interval);
-  }, [isStarted]);
+  }, [isStarted, playCallAudio]);
 
-  const playCallAudio = useCallback((callData) => {
-    if (!('speechSynthesis' in window)) return;
-    try {
-      if (playerRef.current?.setVolume) playerRef.current.setVolume(15);
-    } catch(e) {}
-    const spelledNumber = callData.number.split('').join(' ');
-    const utterance = new SpeechSynthesisUtterance(`Nomor antrean. ${spelledNumber}. silakan menuju, loket. ${callData.loket}`);
-    utterance.lang = 'id-ID';
-    utterance.rate = 0.85;
-    utterance.onend = () => {
-      try { if (playerRef.current?.setVolume) playerRef.current.setVolume(100); } catch(e) {}
-    };
-    setTimeout(() => {
-      try { if (playerRef.current?.setVolume) playerRef.current.setVolume(100); } catch(e) {}
-    }, 8000);
-    window.speechSynthesis.speak(utterance);
-  }, []);
-
-  const onReady = (event) => { playerRef.current = event.target; };
-
-  const onStateChange = (event) => {
-    if (event.data === 0) {
-      if (playlist.length > 1) {
-        setCurrentVidIndex(prev => (prev + 1) % playlist.length);
-      } else {
-        try {
-          playerRef.current?.seekTo(0);
-          playerRef.current?.playVideo();
-        } catch(e) {}
-      }
+  const onReady = (e) => { playerRef.current = e.target; };
+  const onStateChange = (e) => {
+    if (e.data === 0) {
+      if (playlist.length > 1) setCurrentVidIndex(p => (p + 1) % playlist.length);
+      else { try { playerRef.current?.seekTo(0); playerRef.current?.playVideo(); } catch(e) {} }
     }
   };
 
   const getLastCalled = (loketNum) => {
     const called = queues.filter(q => q.status === 'called' && String(q.loket) === String(loketNum));
-    if (called.length === 0) return '---';
-    return called[called.length - 1].number;
+    return called.length ? called[called.length - 1].number : '---';
   };
 
-  const opts = {
-    playerVars: { autoplay: 1, controls: 0, rel: 0, disablekb: 1, modestbranding: 1, mute: 1, loop: 1 },
-  };
+  const opts = { playerVars: { autoplay: 1, controls: 0, rel: 0, disablekb: 1, modestbranding: 1, mute: 1, loop: 1 } };
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans overflow-hidden relative">
       {!isStarted && (
-        <div className="absolute inset-0 bg-slate-900 z-50 flex items-center justify-center p-6 flex-col backdrop-blur-sm">
+        <div className="absolute inset-0 bg-slate-900 z-50 flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-white p-8 rounded-2xl text-center max-w-md shadow-2xl">
             <Monitor size={64} className="mx-auto text-blue-600 mb-6" />
             <h2 className="text-2xl font-bold text-slate-800 mb-4">Mulai Tampilan Layar</h2>
-            <p className="text-slate-600 mb-8">Klik tombol di bawah ini untuk memulai sistem layar dan suara antrean.</p>
+            <p className="text-slate-600 mb-8">Klik tombol di bawah untuk memulai layar dan suara antrean.</p>
             <button onClick={() => setIsStarted(true)} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-3">
               <Play size={24} /> Mulai Layar & Suara
             </button>
@@ -211,7 +189,6 @@ function DisplayView({ onBack }) {
           </div>
         </div>
       )}
-
       <header className="bg-blue-700 text-white p-3 shadow-lg flex justify-between items-center z-10">
         <div className="flex items-center gap-4">
           <img src={logoUrl} alt="Logo" className="h-16 w-auto object-contain drop-shadow-md" />
@@ -220,28 +197,25 @@ function DisplayView({ onBack }) {
             <p className="text-blue-100 text-xs font-medium">Tahun Ajaran 2026/2027</p>
           </div>
         </div>
-        <div className="text-right flex items-center gap-2 bg-blue-800 px-3 py-1.5 rounded-xl border border-blue-600">
+        <div className="flex items-center gap-2 bg-blue-800 px-3 py-1.5 rounded-xl border border-blue-600">
           <Clock size={20} className="text-blue-300" />
           <div className="text-2xl font-bold font-mono tracking-wider">{currentTime.toLocaleTimeString('id-ID', { hour12: false })}</div>
         </div>
       </header>
-
       <main className="flex-1 flex p-3 gap-3 overflow-hidden">
         <div className="w-2/3 flex flex-col gap-3">
           <div className="flex-1 bg-black rounded-2xl overflow-hidden shadow-xl relative border-4 border-slate-300">
             <div className="absolute inset-0 w-full h-full bg-black">
-              {playlist.length > 0 ? (
-                <CustomYouTube videoId={playlist[currentVidIndex]} opts={opts} onReady={onReady} onStateChange={onStateChange} />
-              ) : (
-                <div className="flex items-center justify-center h-full text-slate-500 text-sm">Playlist Kosong</div>
-              )}
+              {playlist.length > 0
+                ? <CustomYouTube videoId={playlist[currentVidIndex]} opts={opts} onReady={onReady} onStateChange={onStateChange} />
+                : <div className="flex items-center justify-center h-full text-slate-500 text-sm">Playlist Kosong</div>
+              }
             </div>
             <div className="absolute top-4 left-4 bg-black/50 text-white px-3 py-1 rounded-full text-xs flex items-center gap-2 backdrop-blur-sm z-10">
               <Monitor size={14} /> Memutar Video ({currentVidIndex + 1}/{Math.max(1, playlist.length)})
             </div>
           </div>
         </div>
-
         <div className="w-1/3 flex flex-col gap-3">
           <div className="bg-gradient-to-br from-indigo-600 to-blue-700 rounded-2xl p-4 shadow-xl text-center text-white flex flex-col justify-center items-center relative overflow-hidden border-4 border-indigo-400">
             <div className="absolute -right-10 -top-10 text-white/10"><Mic size={120} /></div>
@@ -249,11 +223,10 @@ function DisplayView({ onBack }) {
             <div className="text-6xl font-black tracking-tighter my-2 drop-shadow-lg">{currentCall ? currentCall.number : '---'}</div>
             <div className="bg-white/20 px-5 py-1.5 rounded-full backdrop-blur-sm text-lg font-bold border border-white/30 z-10">LOKET {currentCall ? currentCall.loket : '-'}</div>
           </div>
-
           <div className="flex-1 flex flex-col gap-3">
-            {[1, 2, 3].map((loket) => (
+            {[1, 2, 3].map(loket => (
               <div key={loket} className="flex-1 bg-white rounded-2xl p-3 flex items-center shadow-md border border-slate-200">
-                <div className="bg-amber-500 w-16 h-full rounded-xl flex items-center justify-center flex-col text-white shadow-inner">
+                <div className="bg-amber-500 w-16 h-full rounded-xl flex items-center justify-center flex-col text-white">
                   <span className="text-xs font-bold uppercase opacity-80">Loket</span>
                   <span className="text-3xl font-black">{loket}</span>
                 </div>
@@ -266,10 +239,9 @@ function DisplayView({ onBack }) {
           </div>
         </div>
       </main>
-
       <footer className="bg-slate-800 text-white py-2 overflow-hidden border-t-4 border-amber-500 z-10">
         <div className="whitespace-nowrap animate-[marquee_20s_linear_infinite] inline-block text-lg font-medium tracking-wide">{runningText}</div>
-        <style dangerouslySetInnerHTML={{__html: `@keyframes marquee { 0% { transform: translateX(100vw); } 100% { transform: translateX(-100%); } }`}} />
+        <style dangerouslySetInnerHTML={{__html: `@keyframes marquee{0%{transform:translateX(100vw)}100%{transform:translateX(-100%)}}`}} />
       </footer>
     </div>
   );
@@ -283,21 +255,17 @@ function AdminView({ onBack }) {
   const [playlist, setPlaylist] = useState(['Jlyt4bCoiJk']);
   const [ytInput, setYtInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('Menghubungkan...');
 
-  // Polling GAS setiap 5 detik
+  const fetchQueues = async () => {
+    const data = await gasGet();
+    if (data) {
+      setQueues(data.map(r => ({ id: String(r.id), number: r.number, status: r.status, loket: r.loket, timestamp: r.timestamp })));
+      setSyncStatus('Terhubung ✓');
+    }
+  };
+
   useEffect(() => {
-    const fetchQueues = async () => {
-      try {
-        const data = await gasGet();
-        setQueues(data.map(row => ({
-          id: String(row.id),
-          number: row.number,
-          status: row.status,
-          loket: row.loket,
-          timestamp: row.timestamp,
-        })));
-      } catch(e) {}
-    };
     fetchQueues();
     const interval = setInterval(fetchQueues, 5000);
     return () => clearInterval(interval);
@@ -307,27 +275,38 @@ function AdminView({ onBack }) {
     e.preventDefault();
     if (!inputValue.trim()) return;
     setLoading(true);
-    const newQueue = { id: Date.now().toString(), number: inputValue.trim().toUpperCase(), status: 'pending', loket: '', timestamp: new Date().toISOString() };
-    await gasPost({ action: 'create', ...newQueue });
-    setQueues(prev => [...prev, newQueue]);
+    const newQueue = {
+      action: 'create',
+      id: Date.now().toString(),
+      number: inputValue.trim().toUpperCase(),
+      status: 'pending',
+      loket: '',
+      timestamp: new Date().toISOString()
+    };
+    // Optimistic update
+    setQueues(prev => [...prev, { ...newQueue }]);
     setInputValue('');
+    await gasPost(newQueue);
+    setTimeout(fetchQueues, 1500);
     setLoading(false);
   };
 
   const handleCallQueue = async (queueId, loketNumber) => {
-    const q = queues.find(q => q.id === queueId);
-    if (!q) return;
-    await gasPost({ action: 'update', id: queueId, loket: loketNumber });
-    setQueues(prev => prev.map(item => item.id === queueId ? { ...item, status: 'called', loket: loketNumber } : item));
+    // Optimistic update
+    setQueues(prev => prev.map(q => q.id === queueId ? { ...q, status: 'called', loket: loketNumber, timestamp: new Date().toISOString() } : q));
+    await gasPost({ action: 'update', id: queueId, loket: loketNumber, timestamp: new Date().toISOString() });
+    setTimeout(fetchQueues, 1500);
   };
 
   const handleRecall = async (queue) => {
-    await gasPost({ action: 'update', id: queue.id, loket: queue.loket });
+    await gasPost({ action: 'update', id: queue.id, loket: queue.loket, timestamp: new Date().toISOString() });
+    setTimeout(fetchQueues, 1500);
   };
 
   const handleDelete = async (queueId) => {
-    await gasPost({ action: 'delete', id: queueId });
     setQueues(prev => prev.filter(q => q.id !== queueId));
+    await gasPost({ action: 'delete', id: queueId });
+    setTimeout(fetchQueues, 1500);
   };
 
   const extractYtId = (url) => {
@@ -343,22 +322,19 @@ function AdminView({ onBack }) {
 
   const handleAddVideo = (e) => {
     e.preventDefault();
-    const urls = ytInput.split(',');
     let newPlaylist = [...playlist];
-    let addedCount = 0;
-    urls.forEach(url => {
+    let count = 0;
+    ytInput.split(',').forEach(url => {
       const id = extractYtId(url);
-      if (id && !newPlaylist.includes(id)) { newPlaylist.push(id); addedCount++; }
+      if (id && !newPlaylist.includes(id)) { newPlaylist.push(id); count++; }
     });
-    if (addedCount === 0) return alert("URL YouTube tidak valid!");
+    if (!count) return alert("URL YouTube tidak valid!");
     setPlaylist(newPlaylist);
     setYtInput('');
   };
 
-  const handleRemoveVideo = (id) => setPlaylist(prev => prev.filter(v => v !== id));
-
   const pendingQueues = queues.filter(q => q.status === 'pending');
-  const calledQueues = queues.filter(q => q.status === 'called').sort((a, b) => b.timestamp?.localeCompare(a.timestamp));
+  const calledQueues = queues.filter(q => q.status === 'called').sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -369,18 +345,17 @@ function AdminView({ onBack }) {
           <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2"><Settings className="text-blue-600" size={24} /> Panel Admin</h1>
         </div>
         <div className="text-sm font-medium text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200 flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div> Aktif (Sync GAS)
+          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div> {syncStatus}
         </div>
       </header>
 
       <main className="flex-1 p-6 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
         <div className="lg:col-span-7 flex flex-col gap-6">
 
-          {/* Input Nomor */}
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
             <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2"><Plus size={20} className="text-blue-500" /> Input Nomor</h2>
             <form onSubmit={handleAddQueue} className="flex gap-3">
-              <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+              <input type="text" value={inputValue} onChange={e => setInputValue(e.target.value)}
                 placeholder="Contoh: A001"
                 className="flex-1 bg-slate-50 border border-slate-300 text-lg rounded-xl focus:ring-blue-500 block p-3 uppercase font-mono" required />
               <button type="submit" disabled={loading} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl shadow-md disabled:opacity-50">
@@ -389,19 +364,22 @@ function AdminView({ onBack }) {
             </form>
           </div>
 
-          {/* Daftar Tunggu */}
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex-1">
             <h2 className="text-lg font-bold text-slate-800 mb-4 flex justify-between items-center">
               <span>Daftar Tunggu</span>
               <span className="bg-amber-100 text-amber-700 text-xs py-1 px-3 rounded-full font-bold">{pendingQueues.length} Antrian</span>
             </h2>
             <div className="space-y-3 overflow-y-auto max-h-[50vh] pr-2">
-              {pendingQueues.map((q) => (
+              {pendingQueues.length === 0 && <p className="text-slate-400 text-sm text-center py-4">Belum ada antrian</p>}
+              {pendingQueues.map(q => (
                 <div key={q.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">
                   <div className="font-mono text-2xl font-black text-slate-700">{q.number}</div>
                   <div className="flex gap-2">
                     {[1, 2, 3].map(loket => (
-                      <button key={loket} onClick={() => handleCallQueue(q.id, loket)} className="bg-blue-100 hover:bg-blue-600 hover:text-white text-blue-700 font-bold py-2 px-4 rounded-lg transition-colors border border-blue-200">L{loket}</button>
+                      <button key={loket} onClick={() => handleCallQueue(q.id, loket)}
+                        className="bg-blue-100 hover:bg-blue-600 hover:text-white text-blue-700 font-bold py-2 px-4 rounded-lg transition-colors border border-blue-200">
+                        L{loket}
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -409,16 +387,15 @@ function AdminView({ onBack }) {
             </div>
           </div>
 
-          {/* Teks & Playlist */}
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-5">
             <div>
               <h2 className="text-sm font-bold text-slate-800 mb-2 flex items-center gap-2"><Settings size={16} className="text-amber-500" /> Teks Bawah Layar (Running Text)</h2>
-              <form onSubmit={(e) => { e.preventDefault(); }} className="flex gap-2">
-                <input type="text" value={textInput} onChange={(e) => setTextInput(e.target.value)}
+              <div className="flex gap-2">
+                <input type="text" value={textInput} onChange={e => setTextInput(e.target.value)}
                   placeholder="Masukkan teks pengumuman..."
-                  className="flex-1 bg-slate-50 border border-slate-300 text-sm rounded-lg focus:ring-blue-500 block p-2.5" />
-                <button type="submit" className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded-lg text-sm">Ubah Teks</button>
-              </form>
+                  className="flex-1 bg-slate-50 border border-slate-300 text-sm rounded-lg block p-2.5" />
+                <button className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded-lg text-sm">Ubah Teks</button>
+              </div>
             </div>
             <hr className="border-slate-100" />
             <div>
@@ -427,7 +404,7 @@ function AdminView({ onBack }) {
                 <span className="text-xs bg-slate-100 px-2 py-1 rounded text-slate-500">{playlist.length} Video</span>
               </h2>
               <form onSubmit={handleAddVideo} className="flex gap-2 mb-3">
-                <input type="text" value={ytInput} onChange={(e) => setYtInput(e.target.value)}
+                <input type="text" value={ytInput} onChange={e => setYtInput(e.target.value)}
                   placeholder="Link YouTube (Bisa banyak, pisah koma)"
                   className="flex-1 bg-slate-50 border border-slate-300 text-sm rounded-lg block p-2.5" required />
                 <button type="submit" className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 text-sm"><Plus size={16}/> Tambah</button>
@@ -436,9 +413,9 @@ function AdminView({ onBack }) {
                 {playlist.map((videoId, index) => (
                   <div key={videoId} className="flex items-center gap-3 bg-slate-50 p-2 rounded-lg border border-slate-200">
                     <span className="text-xs font-bold text-slate-400">{index + 1}.</span>
-                    <img src={`https://img.youtube.com/vi/${videoId}/default.jpg`} alt="thumb" className="w-12 h-9 object-cover rounded bg-slate-200" />
+                    <img src={`https://img.youtube.com/vi/${videoId}/default.jpg`} alt="thumb" className="w-12 h-9 object-cover rounded" />
                     <span className="flex-1 font-mono text-sm text-slate-700">{videoId}</span>
-                    <button onClick={() => handleRemoveVideo(videoId)} className="text-red-500 hover:bg-red-50 p-1.5 rounded"><Trash2 size={16}/></button>
+                    <button onClick={() => setPlaylist(p => p.filter(v => v !== videoId))} className="text-red-500 hover:bg-red-50 p-1.5 rounded"><Trash2 size={16}/></button>
                   </div>
                 ))}
               </div>
@@ -446,7 +423,6 @@ function AdminView({ onBack }) {
           </div>
         </div>
 
-        {/* Riwayat */}
         <div className="lg:col-span-5">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-full flex flex-col">
             <h2 className="text-lg font-bold text-slate-800 mb-4 flex justify-between items-center">
@@ -454,7 +430,7 @@ function AdminView({ onBack }) {
               <span className="bg-emerald-100 text-emerald-700 text-xs py-1 px-3 rounded-full font-bold">{calledQueues.length} Selesai</span>
             </h2>
             <div className="space-y-3 overflow-y-auto flex-1 pr-2">
-              {calledQueues.map((q) => (
+              {calledQueues.map(q => (
                 <div key={q.id} className="flex items-center justify-between p-3 bg-emerald-50/50 rounded-xl border border-emerald-100">
                   <div>
                     <div className="font-mono text-xl font-bold text-slate-800">{q.number}</div>
