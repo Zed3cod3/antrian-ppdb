@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Play, Monitor, Settings, Plus, Mic, CheckCircle2, RotateCcw, Clock, Trash2 } from 'lucide-react';
+import { Play, Monitor, Settings, Plus, Mic, CheckCircle2, RotateCcw, Clock, Trash2, Volume2 } from 'lucide-react';
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbymRfcrs1wV8FsT-O1yUinDZHXAuRpTBT8dlGQv4jRvTqlx7ZwsnX-NOARilgNjKXP9yA/exec";
 
@@ -112,6 +112,11 @@ function DisplayView({ onBack }) {
   const [playlist, setPlaylist] = useState(['Jlyt4bCoiJk']);
   const [currentVidIndex, setCurrentVidIndex] = useState(0);
   const [isStarted, setIsStarted] = useState(false);
+  
+  // State untuk Volume
+  const [vidVolume, setVidVolume] = useState(100);
+  const vidVolumeRef = useRef(100);
+
   const playerRef = useRef(null);
   const lastCallRef = useRef('');
   const logoUrl = "https://i.ibb.co.com/mV7Qr7Fw/logo.png";
@@ -121,15 +126,29 @@ function DisplayView({ onBack }) {
     return () => clearInterval(timer);
   }, []);
 
+  const handleVolumeChange = (newVolume) => {
+    setVidVolume(newVolume);
+    vidVolumeRef.current = newVolume;
+    if (playerRef.current?.setVolume) {
+      playerRef.current.setVolume(newVolume);
+    }
+  };
+
   const playCallAudio = useCallback((callData) => {
     if (!('speechSynthesis' in window)) return;
+    
+    // Kecilkan volume YouTube saat panggilan masuk
     try { if (playerRef.current?.setVolume) playerRef.current.setVolume(15); } catch(e) {}
+    
     const spelledNumber = String(callData.number).split('').join(' ');
     const utterance = new SpeechSynthesisUtterance(`Nomor antrean. ${spelledNumber}. silakan menuju, loket. ${callData.loket}`);
     utterance.lang = 'id-ID';
     utterance.rate = 0.85;
-    utterance.onend = () => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(100); } catch(e) {} };
-    setTimeout(() => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(100); } catch(e) {} }, 8000);
+    
+    // Kembalikan ke volume yang diatur user setelah panggilan selesai
+    utterance.onend = () => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(vidVolumeRef.current); } catch(e) {} };
+    setTimeout(() => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(vidVolumeRef.current); } catch(e) {} }, 8000);
+    
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
   }, []);
@@ -143,7 +162,6 @@ function DisplayView({ onBack }) {
       const called = data.filter(r => r.status === 'called').sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
       if (called.length > 0) {
         const latest = called[0];
-        // FIX: Tambahkan timestamp ke callKey agar 'Ulangi' memicu trigger karena timestamp-nya berbeda
         const callKey = `${latest.id}-${latest.loket}-${latest.timestamp}`;
         if (callKey !== lastCallRef.current) {
           lastCallRef.current = callKey;
@@ -160,8 +178,13 @@ function DisplayView({ onBack }) {
 
   const onReady = (e) => {
     playerRef.current = e.target;
-    try { e.target.unMute(); e.target.setVolume(100); e.target.playVideo(); } catch(err) {}
+    try { 
+      e.target.unMute(); 
+      e.target.setVolume(vidVolumeRef.current); 
+      e.target.playVideo(); 
+    } catch(err) {}
   };
+
   const onStateChange = (e) => {
     if (e.data === 0) {
       if (playlist.length > 1) setCurrentVidIndex(p => (p + 1) % playlist.length);
@@ -187,7 +210,7 @@ function DisplayView({ onBack }) {
             <button onClick={() => {
               setIsStarted(true);
               setTimeout(() => {
-                try { if (playerRef.current?.unMute) { playerRef.current.unMute(); playerRef.current.setVolume(100); playerRef.current.playVideo(); } } catch(e) {}
+                try { if (playerRef.current?.unMute) { playerRef.current.unMute(); playerRef.current.setVolume(vidVolumeRef.current); playerRef.current.playVideo(); } } catch(e) {}
               }, 500);
             }} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-3">
               <Play size={24} /> Mulai Layar & Suara
@@ -204,23 +227,46 @@ function DisplayView({ onBack }) {
             <p className="text-blue-100 text-xs font-medium">Tahun Ajaran 2026/2027</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 bg-blue-800 px-3 py-1.5 rounded-xl border border-blue-600">
-          <Clock size={20} className="text-blue-300" />
-          <div className="text-2xl font-bold font-mono tracking-wider">{currentTime.toLocaleTimeString('id-ID', { hour12: false })}</div>
+        <div className="flex flex-col items-end bg-blue-800 px-4 py-2 rounded-xl border border-blue-600 shadow-inner">
+          <div className="flex items-center gap-2">
+            <Clock size={20} className="text-blue-300" />
+            <div className="text-2xl font-bold font-mono tracking-wider">{currentTime.toLocaleTimeString('id-ID', { hour12: false })}</div>
+          </div>
+          <div className="text-blue-200 text-xs font-medium mt-0.5 tracking-wide uppercase">
+            {currentTime.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+          </div>
         </div>
       </header>
       <main className="flex-1 flex p-3 gap-3 overflow-hidden">
-        <div className="w-2/3 flex flex-col gap-3">
-          <div className="flex-1 bg-black rounded-2xl overflow-hidden shadow-xl relative border-4 border-slate-300">
+        <div className="w-2/3 flex flex-col gap-3 relative">
+          <div className="flex-1 bg-black rounded-2xl overflow-hidden shadow-xl relative border-4 border-slate-300 group">
             <div className="absolute inset-0 w-full h-full bg-black">
               {playlist.length > 0
                 ? <CustomYouTube videoId={playlist[currentVidIndex]} opts={opts} onReady={onReady} onStateChange={onStateChange} />
                 : <div className="flex items-center justify-center h-full text-slate-500 text-sm">Playlist Kosong</div>
               }
             </div>
-            <div className="absolute top-4 left-4 bg-black/50 text-white px-3 py-1 rounded-full text-xs flex items-center gap-2 backdrop-blur-sm z-10">
+            
+            {/* Indikator Video */}
+            <div className="absolute top-4 left-4 bg-black/50 text-white px-3 py-1 rounded-full text-xs flex items-center gap-2 backdrop-blur-sm z-10 pointer-events-none">
               <Monitor size={14} /> Memutar Video ({currentVidIndex + 1}/{Math.max(1, playlist.length)})
             </div>
+
+            {/* Slider Pengatur Volume Custom (Terlihat saat dihover) */}
+            <div className="absolute bottom-4 right-4 bg-black/60 backdrop-blur-md px-4 py-2 rounded-xl flex items-center gap-3 z-20 opacity-50 hover:opacity-100 transition-opacity">
+              <Volume2 size={20} className="text-white" />
+              <input 
+                type="range" 
+                min="0" 
+                max="100" 
+                value={vidVolume}
+                onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                className="w-24 accent-blue-500 cursor-pointer"
+                title="Atur Volume Video"
+              />
+              <span className="text-white text-xs font-mono w-6">{vidVolume}%</span>
+            </div>
+
           </div>
         </div>
         <div className="w-1/3 flex flex-col gap-3">
@@ -305,7 +351,6 @@ function AdminView({ onBack }) {
   };
 
   const handleRecall = async (queue) => {
-    // FIX: Buat timestamp baru secara eksplisit saat recall agar frontend melihatnya sebagai event baru
     const newTimestamp = new Date().toISOString();
     setQueues(prev => prev.map(q => q.id === queue.id ? { ...q, timestamp: newTimestamp } : q));
     await gasPost({ action: 'update', id: queue.id, loket: queue.loket, timestamp: newTimestamp });
