@@ -118,7 +118,7 @@ function DisplayView({ onBack }) {
   const vidVolumeRef = useRef(100);
 
   const playerRef = useRef(null);
-  const lastCallRef = useRef('');
+  const lastTimestampRef = useRef(null);
   const logoUrl = "https://i.ibb.co.com/mV7Qr7Fw/logo.png";
 
   useEffect(() => {
@@ -147,17 +147,21 @@ function DisplayView({ onBack }) {
     
     const spelledNumber = String(callData.number).split('').join(' ');
     
-    // Menggunakan koma agar intonasi jeda lebih natural dan tidak memicu pengulangan
-    const utterance = new SpeechSynthesisUtterance(`Nomor antrian, ${spelledNumber}, silakan menuju loket, ${callData.loket}`);
+    // Buat kalimat tunggal
+    const singleCall = `Nomor antrian, ${spelledNumber}, silakan menuju loket, ${callData.loket}`;
+    
+    // Gabungkan menjadi 2 kali panggilan berturut-turut dalam satu instruksi suara
+    // Tambahkan titik (.) di tengah agar ada jeda natural sebelum pengulangan
+    const utterance = new SpeechSynthesisUtterance(`${singleCall}. ${singleCall}`);
     utterance.lang = 'id-ID';
     utterance.rate = 0.85;
     
     // Kembalikan ke volume yang diatur user setelah panggilan selesai
     utterance.onend = () => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(vidVolumeRef.current); } catch(e) {} };
-    setTimeout(() => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(vidVolumeRef.current); } catch(e) {} }, 8000);
+    // Fallback timer diperpanjang menjadi 15 detik (15000ms) karena suara sekarang diputar 2x
+    setTimeout(() => { try { if (playerRef.current?.setVolume) playerRef.current.setVolume(vidVolumeRef.current); } catch(e) {} }, 15000);
     
     // Beri jeda waktu 150ms sebelum memulai suara baru
-    // Ini memperbaiki masalah bug "suara ganda/stuttering" di Google Chrome
     setTimeout(() => {
       window.speechSynthesis.speak(utterance);
     }, 150);
@@ -169,15 +173,38 @@ function DisplayView({ onBack }) {
       const data = await gasGet();
       setQueues(data.map(r => ({ id: String(r.id), number: r.number, status: r.status, loket: r.loket, timestamp: r.timestamp })));
 
-      const called = data.filter(r => r.status === 'called').sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+      // Urutkan berdasarkan waktu panggilan (yang terbaru di atas)
+      const called = data.filter(r => r.status === 'called').sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
       if (called.length > 0) {
         const latest = called[0];
-        const callKey = `${latest.id}-${latest.loket}-${latest.timestamp}`;
-        if (callKey !== lastCallRef.current) {
-          lastCallRef.current = callKey;
+        const latestTime = new Date(latest.timestamp).getTime();
+
+        // 1. KASUS AWAL LOAD/RELOAD: 
+        if (lastTimestampRef.current === null) {
+          lastTimestampRef.current = latestTime;
+          setCurrentCall({ number: latest.number, loket: latest.loket });
+          return;
+        }
+
+        // 2. KASUS PANGGILAN BARU / ULANGI: 
+        if (latestTime > lastTimestampRef.current) {
+          lastTimestampRef.current = latestTime;
           const callData = { number: latest.number, loket: latest.loket };
           setCurrentCall(callData);
           playCallAudio(callData);
+        } 
+        // 3. KASUS DIHAPUS: 
+        else if (latestTime < lastTimestampRef.current) {
+          lastTimestampRef.current = latestTime;
+          setCurrentCall({ number: latest.number, loket: latest.loket });
+        }
+
+      } else {
+        // Jika data benar-benar kosong (Semua dihapus)
+        if (lastTimestampRef.current !== null) {
+          lastTimestampRef.current = null;
+          setCurrentCall(null);
         }
       }
     };
