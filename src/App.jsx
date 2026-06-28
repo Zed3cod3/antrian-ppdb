@@ -159,7 +159,11 @@ function DisplayView({ onBack }) {
     return () => clearInterval(interval);
   }, [isStarted, playCallAudio]);
 
-  const onReady = (e) => { playerRef.current = e.target; };
+  const onReady = (e) => {
+    playerRef.current = e.target;
+    // Unmute setelah user interaksi
+    try { e.target.unMute(); e.target.setVolume(100); e.target.playVideo(); } catch(err) {}
+  };
   const onStateChange = (e) => {
     if (e.data === 0) {
       if (playlist.length > 1) setCurrentVidIndex(p => (p + 1) % playlist.length);
@@ -182,7 +186,12 @@ function DisplayView({ onBack }) {
             <Monitor size={64} className="mx-auto text-blue-600 mb-6" />
             <h2 className="text-2xl font-bold text-slate-800 mb-4">Mulai Tampilan Layar</h2>
             <p className="text-slate-600 mb-8">Klik tombol di bawah untuk memulai layar dan suara antrean.</p>
-            <button onClick={() => setIsStarted(true)} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-3">
+            <button onClick={() => {
+              setIsStarted(true);
+              setTimeout(() => {
+                try { if (playerRef.current?.unMute) { playerRef.current.unMute(); playerRef.current.setVolume(100); playerRef.current.playVideo(); } } catch(e) {}
+              }, 500);
+            }} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-3">
               <Play size={24} /> Mulai Layar & Suara
             </button>
             <button onClick={onBack} className="mt-4 text-slate-500 hover:text-slate-700 text-sm">Kembali ke Menu Utama</button>
